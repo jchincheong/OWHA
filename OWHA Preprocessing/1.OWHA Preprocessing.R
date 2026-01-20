@@ -1,0 +1,345 @@
+###############################################################################
+
+# 1. SETUP AND CONFIGURATION
+
+###############################################################################
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+# ------------------------------------------------------------------------------
+
+# USER CONFIGURATION
+
+# ------------------------------------------------------------------------------
+
+# Root directory containing all data and shared functions.
+
+# For GitHub portability, convert to a relative path if possible.
+
+data_root <- "YOU SELECT"
+
+###############################################################################
+
+# 1.1 LOAD LIBRARIES
+
+###############################################################################
+
+library(Seurat)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(viridis)
+library(scCustomize)
+library(khroma)
+
+###############################################################################
+
+# 1.2 GLOBAL OPTIONS AND CUSTOM FUNCTIONS
+
+###############################################################################
+
+options(future.globals.maxSize = 85 * 1024^3)
+
+source(file.path(data_root, "Useful Functions/DeterminingPcsFunction.R"))
+source(file.path(data_root, "Useful Functions/Run_ScType.R"))
+
+path_to_db_file <- file.path(data_root, "Annotation/Skin_immunome_db.xlsx")
+
+###############################################################################
+
+# 1.3 PLOTTING UTILITIES
+
+###############################################################################
+
+custom_theme <- theme(
+  text = element_text(family = "Arial", face = "bold"),
+  plot.background = element_rect(fill = "transparent", color = NA),
+  panel.background = element_rect(fill = "transparent", color = NA),
+  legend.background = element_rect(fill = "transparent")
+)
+
+ggsave_multidevice <- function(
+    plot = last_plot(),
+    filename_base,
+    devices = c("svg", "png"),
+    width = 7,
+    height = 7,
+    units = "in",
+    dpi = 300
+) {
+  for (device in devices) {
+    ggsave(
+      filename = paste0(filename_base, ".", device),
+      plot = plot,
+      width = width,
+      height = height,
+      units = units,
+      dpi = dpi
+    )
+  }
+}
+
+###############################################################################
+
+# 2. DATA LOADING
+
+###############################################################################
+
+###############################################################################
+
+# 2.1 SRSP LAB snRNA-seq DATA
+
+###############################################################################
+
+sn_base <- file.path(data_root, "Raw Data/snRNAseq Raw Data")
+
+sn_dirs <- list(
+  YJ001_uw  = "YJ001_UW",
+  YJ002_d7  = "YJ002_DPW7",
+  YJ003_d7  = "YJ003_DPW7",
+  YJ004_d15 = "YJ004_DPW15",
+  YJ005_d15 = "YJ005_DPW15",
+  YJ006_d30 = "YJ006_DPW30",
+  YJ007_d30 = "YJ007_DPW30",
+  YJ008_uw  = "YJ008_UWO",
+  YJ009_d4  = "YJ009_DPW4",
+  YJ010_d4  = "YJ0010_DPW4",
+  YJ011_uw  = "YJ011_UW/YJ011_cellranger_count_outs/filtered_feature_bc_matrix",
+  YJ012_d4  = "YJ012_D4PW/YJ012_cellranger_count_outs/filtered_feature_bc_matrix",
+  YJ013_d4  = "YJ013_D4PW/YJ012_cellranger_count_outs/filtered_feature_bc_matrix"
+)
+
+sn_data_list <- lapply(sn_dirs, function(x) {
+  Read10X(file.path(sn_base, x))
+})
+
+###############################################################################
+
+# 2.2 SRSP LAB CITE-seq DATA
+
+###############################################################################
+
+cite_base <- file.path(data_root, "Raw Data/CITEseq Raw Data")
+
+cite_dirs <- list(
+  YS001_uw  = "YS001_UW/filtered_feature_bc_matrix",
+  YS002_d30 = "YS002_D30PW/filtered_feature_bc_matrix",
+  YS003_d15 = "YS003_D15PW_RNAProtein/filtered_feature_bc_matrix",
+  YS004_d15 = "YS004_D15PW_RNAProtein/filtered_feature_bc_matrix",
+  YS005_d30 = "YS005_D30PW_ProjectSEE/filtered_feature_bc_matrix",
+  YS006_uw  = "YS006_PeripheralUW_ProjectSEE/filtered_feature_bc_matrix"
+)
+
+cite_data_list <- lapply(cite_dirs, function(x) {
+  Read10X(file.path(cite_base, x))
+})
+
+###############################################################################
+
+# 2.3 CITE-seq ADT CLEANING
+
+###############################################################################
+
+prefixes <- c("HuMsRt.", "HuMs.", "MsRt.", "Ms.")
+
+for (nm in names(cite_data_list)) {
+  for (pre in prefixes) {
+    cite_data_list[[nm]][["Antibody Capture"]] <-
+      CollapseSpeciesExpressionMatrix(
+        cite_data_list[[nm]][["Antibody Capture"]],
+        prefix = pre,
+        controls = "Isotype",
+        ncontrols = 25
+      )
+  }
+}
+
+###############################################################################
+
+# 2.4 PUBLIC scRNA-seq DATASETS
+
+###############################################################################
+
+public_base <- file.path(data_root, "Raw Data/scRNAseq Raw Data")
+
+# Haensel et al. 2020
+
+haensel_path <- file.path(public_base, "Realignment")
+haensel_names <- c(
+  "HaenselUW1", "HaenselUW2",
+  "Haenselwo1", "Haenselwo2", "Haenselwo3"
+)
+
+haensel_data <- lapply(haensel_names, function(x) {
+  Read10X(file.path(haensel_path, x, "filtered_feature_bc_matrix"))
+})
+
+# Justynski et al. 2023
+
+just_path <- file.path(public_base, "GSE223660_Justynski_2023")
+
+Justynski_24 <- ReadMtx(
+  file.path(just_path, "GSM6970228_24hr_matrix.mtx.gz"),
+  file.path(just_path, "GSM6970228_24hr_barcodes.tsv.gz"),
+  file.path(just_path, "GSM6970228_24hr_features.tsv.gz")
+)
+
+Justynski_48 <- ReadMtx(
+  file.path(just_path, "GSM6970229_48hr_matrix.mtx.gz"),
+  file.path(just_path, "GSM6970229_48hr_barcodes.tsv.gz"),
+  file.path(just_path, "GSM6970229_48hr_features.tsv.gz")
+)
+
+# Vu / Young datasets
+
+vu_path <- file.path(public_base, "Realignment")
+
+Vu_D7PW_v2_1 <- Read10X(file.path(vu_path, "VuD7PWv2_1/filtered_feature_bc_matrix"))
+Vu_D7PW_v2_2 <- Read10X(file.path(vu_path, "VuD7PWv2_2/filtered_feature_bc_matrix"))
+Vu_UW_v3     <- Read10X(file.path(vu_path, "VuYoungv3UW/filtered_feature_bc_matrix"))
+Vu_D4PW_v3   <- Read10X(file.path(vu_path, "VuYoungv3D4PW/filtered_feature_bc_matrix"))
+Vu_D7PW_v3   <- Read10X(file.path(vu_path, "VuD7PWv3/filtered_feature_bc_matrix"))
+
+###############################################################################
+
+# 3. SEURAT OBJECT CREATION AND MERGING
+
+###############################################################################
+
+# Haensel objects
+
+haensel_objs <- mapply(
+  function(d, p) CreateSeuratObject(d, project = p, min.cells = 3),
+  haensel_data,
+  c("UW_Haensel1","UW_Haensel2","D4PW_Haensel1","D4PW_Haensel2","D4PW_Haensel3"),
+  SIMPLIFY = FALSE
+)
+
+# Justynski objects
+
+just_objs <- list(
+  CreateSeuratObject(Justynski_24, project = "D1PW_Justynski", min.cells = 3),
+  CreateSeuratObject(Justynski_48, project = "D2PW_Justynski", min.cells = 3)
+)
+
+# Vu objects
+
+vu_objs <- list(
+  CreateSeuratObject(Vu_D7PW_v2_1, project = "D7PW_Vu_v2_1", min.cells = 3),
+  CreateSeuratObject(Vu_D7PW_v2_2, project = "D7PW_Vu_v2_2", min.cells = 3),
+  CreateSeuratObject(Vu_UW_v3,     project = "UW_Vu_v3",     min.cells = 3),
+  CreateSeuratObject(Vu_D4PW_v3,   project = "D4PW_Vu_v3",   min.cells = 3),
+  CreateSeuratObject(Vu_D7PW_v3,   project = "D7PW_Vu_v3",   min.cells = 3)
+)
+
+# snRNA-seq objects
+
+sn_projects <- c(
+  "UW_snRNAseq_1","D7PW_snRNAseq_1","D7PW_snRNAseq_2",
+  "D15PW_snRNAseq_1","D15PW_snRNAseq_2",
+  "D30PW_snRNAseq_1","D30PW_snRNAseq_2",
+  "UW_snRNAseq_2","D4PW_snRNAseq_1","D4PW_snRNAseq_2",
+  "UW_snRNAseq_3","D4PW_snRNAseq_3","D4PW_snRNAseq_4"
+)
+
+sn_objs <- mapply(
+  function(d, p) CreateSeuratObject(d, project = p, min.cells = 3),
+  sn_data_list,
+  sn_projects,
+  SIMPLIFY = FALSE
+)
+
+# CITE-seq objects
+
+cite_projects <- c(
+  "UW_CITEseq_1","D30PW_CITEseq_1","D15PW_CITEseq_1",
+  "D15PW_CITEseq_2","D30PW_CITEseq_2","UW_CITEseq_2"
+)
+
+cite_objs <- mapply(
+  function(d, p) {
+    obj <- CreateSeuratObject(d[["Gene Expression"]], project = p, min.cells = 3)
+    obj[["ADT"]] <- CreateAssayObject(d[["Antibody Capture"]][, colnames(obj)])
+    obj
+  },
+  cite_data_list,
+  cite_projects,
+  SIMPLIFY = FALSE
+)
+
+# Merge all datasets
+
+alldata <- merge(
+  haensel_objs[[1]],
+  y = c(
+    haensel_objs[-1],
+    just_objs,
+    vu_objs,
+    sn_objs,
+    cite_objs
+  )
+)
+
+###############################################################################
+
+# 4. QUALITY CONTROL AND SCORING
+
+###############################################################################
+
+alldata[["percent_mito"]] <- PercentageFeatureSet(alldata, pattern = "^mt-")
+alldata[["percent_ribo"]] <- PercentageFeatureSet(alldata, pattern = "^Rp[sl]")
+
+DefaultAssay(alldata) <- "RNA"
+alldata <- NormalizeData(alldata, verbose = FALSE) %>% JoinLayers()
+
+# Stress scoring
+
+stress_file <- file.path(
+  data_root,
+  "2. Integration of Data/Stress Singatures/StressGenes.csv"
+)
+
+if (file.exists(stress_file)) {
+  stress_genes <- read.csv(stress_file)$Gene |> stringr::str_to_title()
+  stress_genes <- intersect(stress_genes, rownames(alldata))
+  alldata <- AddModuleScore(alldata, list(stress_genes), name = "StressScore")
+}
+
+# Transcription factor scoring
+
+tf_file <- file.path(
+  data_root,
+  "2. Integration of Data/Transcription Factor Scoring/Mus_musculus_TF.csv"
+)
+
+if (file.exists(tf_file)) {
+  tf_list <- read.csv(tf_file)
+  alldata[["TF_percentage"]] <- PercentageFeatureSet(alldata, tf_list$Symbol)
+}
+
+saveRDS(alldata, "MultimodalAtlas_MergedUnfilteredData.rds")
+
+###############################################################################
+
+# 5. VISUALIZATION
+
+###############################################################################
+
+VlnPlot(
+  alldata,
+  features = c("nFeature_RNA","nCount_RNA","percent_mito","percent_ribo"),
+  ncol = 2,
+  pt.size = 0
+) & custom_theme
+
+ggsave_multidevice("QC_Violin_Plots", width = 16, height = 8)
+
+FeatureScatter(alldata, "percent_ribo", "percent_mito") +
+  geom_hline(yintercept = 15, color = "red") +
+  geom_vline(xintercept = 50, color = "red") +
+  custom_theme
