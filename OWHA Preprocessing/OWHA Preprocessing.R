@@ -1,4 +1,4 @@
-title: "Multimodal Atlas Preprocessing" author: "Simon Van Deursen" date: "r Sys.Date()" output: html_notebook: toc: true toc_float: true
+title: "Multimodal Atlas Preprocessing" 
 
 ##1. Setup and Configuration
 
